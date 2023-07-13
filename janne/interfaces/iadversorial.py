@@ -44,12 +44,22 @@ class IAdversorial(ABC, Generic[T]):
   @abstractmethod
   def loss(self, truth: np.ndarray, prediction: T,
            raw_data: np.ndarray, blured_data: T) -> T:
-    """Compute the loss of the adversorialn algorithm
+    """Compute the loss of the adversorial algorithm
 
     :param truth: The true prediction
     :param prediction: The prediction produced by the :class:`IModel`
     :param raw_data: The raw data
     :param blured_data: The data blured by this :class:`IAdversorial`
     :return: The computed loss
+    """
+    pass
+
+
+  @abstractmethod
+  def back_propagate(self, loss: T) -> None:
+    """Backpropagate the loss to the IAdversorial
+
+    :param T loss: The loss that should have been computed with the
+     loss method
     """
     pass

@@ -85,3 +85,11 @@ class IModel(ABC, Generic[T]):
     :rtype: T
     """
     pass
+
+  @abstractmethod
+  def back_propagate(self, loss: T) -> None:
+    """Backpropagate the loss to the IModel
+
+    :param T loss: The loss that should have been computed with the loss method
+    """
+    pass
