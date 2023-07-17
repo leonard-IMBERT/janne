@@ -1,6 +1,6 @@
 """Description of the informal interface :class:`IAdversorial`
 
-This interface represent an object that can "blur" and event
+This interface represent an object that can "perturbate" and event
 so that a :class:`IModel` does not recontruct correctly the
 truth
 """
@@ -15,7 +15,7 @@ class IAdversorial(ABC, Generic[T]):
   """Informal interface representing an adversorial algorithm
 
   This algorithm work in tandem with a :class:`IModel` and will
-  try to fool it by `blurring` the data.
+  try to fool it by `perturbating` the data.
   """
 
   @abstractmethod
@@ -32,24 +32,24 @@ class IAdversorial(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def blur(self, raw_data: np.ndarray) -> T:
-    """Blur the raw data
+  def perturbate(self, raw_data: T) -> T:
+    """Perturbate the raw data
 
-    :param ndarray raw_data: The raw data to blur
-    :return: The blured data in a format that can be understood by
+    :param T raw_data: The raw data to perturbate
+    :return: The perturbated data in a format that can be understood by
      the :class:`IModel`
     """
     pass
 
   @abstractmethod
   def loss(self, truth: np.ndarray, prediction: T,
-           raw_data: np.ndarray, blured_data: T) -> T:
+           raw_data: np.ndarray, perturbated_data: T) -> T:
     """Compute the loss of the adversorial algorithm
 
     :param truth: The true prediction
     :param prediction: The prediction produced by the :class:`IModel`
     :param raw_data: The raw data
-    :param blured_data: The data blured by this :class:`IAdversorial`
+    :param perturbated_data: The data pertubated by this :class:`IAdversorial`
     :return: The computed loss
     """
     pass
