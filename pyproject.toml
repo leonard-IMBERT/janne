@@ -1,2 +1,15 @@
+[project]
+name = "janne"
+version = "0.1.0"
+authors = [
+  { name="Leonard Imbert", email="imbert418@gmail.com" },
+]
+description = "This project aim to give a informal structure to implement Adversorial Neural Network (ANN) to run against reconstruction algorithms of JUNO"
+readme = "README.md"
+requires-python = ">=3.6"
+
+[project.urls]
+homepage = "https://github.com/leonard-IMBERT/janne"
+
 [tool.pyright]
 
