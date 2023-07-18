@@ -1,4 +1,4 @@
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Iterable, List, Optional, Tuple, Union
 
 import random
 import itertools
@@ -37,8 +37,8 @@ class Reader(Iterable[Event]):
   :param int n_workers: The number of worker to use for the Reader.
    Must be superior or equal to 1
   """
-  def __init__(self, config_generator: List[Any] | Iterable[Any],
-               decoders: List[type[IDecoder]] | type[IDecoder],
+  def __init__(self, config_generator: Union[List[Any],  Iterable[Any]],
+               decoders: Union[List[type[IDecoder]],  type[IDecoder]],
                seed: int = 42,
                n_workers: int = 1):
     # pylint: disable=line-too-long
