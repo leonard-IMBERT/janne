@@ -42,8 +42,8 @@ class Reader(Iterable[Event]):
                seed: int = 42,
                n_workers: int = 1):
     # pylint: disable=line-too-long
-    random.seed(seed)
-    np.random.seed(seed)
+    self._random = random.Random(seed)
+    self._np_random = np.random.default_rng(seed)
 
     # Event storage and fetching
     self._need = Condition()
@@ -75,7 +75,7 @@ class Reader(Iterable[Event]):
 
     # Start the threads
     while sum(map(lambda thread: thread.is_alive(), self._workers)) < self._n_workers:
-      index = np.random.choice(self._indexes[np.invert(self._consumed_mask)])
+      index = self._np_random.choice(self._indexes[np.invert(self._consumed_mask)])
 
       self._workers[index].start()
       self._consumed_mask[index] = True
@@ -114,7 +114,7 @@ class Reader(Iterable[Event]):
       avail_files = self._indexes[np.invert(self._consumed_mask)]
       if len(avail_files) <= 0:
         return False
-      index = np.random.choice(avail_files)
+      index = self._np_random.choice(avail_files)
 
       self._workers[index].start()
       self._consumed_mask[index] = True
