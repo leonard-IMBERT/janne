@@ -16,10 +16,10 @@ def _decode_consumer(decoder: IDecoder, condition: Condition,
                      ):
   with condition:
     for event in decoder:
-      condition.wait()
-      condition.acquire()
-      event_queue.put(event)
-      condition.release()
+      with condition:
+        condition.wait()
+        event_queue.put(event)
+        condition.notify()
 
 
 
@@ -47,7 +47,6 @@ class Reader(Iterable[Event]):
 
     # Event storage and fetching
     self._need = Condition()
-    self._need.acquire()
     self._events : Queue[Event] = Queue()
 
     self._n_workers = n_workers
@@ -97,15 +96,11 @@ class Reader(Iterable[Event]):
 
 
     # Notify then release lock
-    self._need.notify()
-    self._need.release()
-
-    # Wait for queue to fill up
-    while self._events.empty():
-      pass
+    with self._need:
+      self._need.notify()
+      self._need.wait()
 
     # Try to aquire the lock again
-    self._need.acquire()
 
     return self._events.get()
 
