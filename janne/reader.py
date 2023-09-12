@@ -3,6 +3,7 @@ from typing import Any, Iterable, List, Optional, Tuple, Union
 import random
 import itertools
 from threading import Thread, Condition
+from threading import Event as AtomicBoolean
 from queue import Queue
 
 import numpy as np
@@ -12,12 +13,16 @@ from janne.interfaces.idecoder import IDecoder
 Event = Tuple[np.ndarray, Optional[np.ndarray]]
 
 def _decode_consumer(decoder: IDecoder, condition: Condition,
-                     event_queue: Queue[Event]
+                     event_queue: Queue[Event],
+                     stop_flag: AtomicBoolean,
                      ):
   with condition:
     for event in decoder:
-      with condition:
-        condition.wait()
+      condition.wait()
+      if stop_flag.is_set():
+        condition.notify()
+        break
+      else:
         event_queue.put(event)
         condition.notify()
 
@@ -48,6 +53,8 @@ class Reader(Iterable[Event]):
     # Event storage and fetching
     self._need = Condition()
     self._events : Queue[Event] = Queue()
+    self._stop_flag: AtomicBoolean = AtomicBoolean()
+    self._stop_flag.clear()
 
     self._n_workers = n_workers
 
@@ -65,7 +72,7 @@ class Reader(Iterable[Event]):
       dec.initialize(config)
       self._decoders.append(dec)
       self._workers.append(Thread(target=_decode_consumer,
-                                  args=(dec, self._need, self._events)))
+                                  args=(dec, self._need, self._events, self._stop_flag)))
       self._consumed_mask.append(False)
       self._indexes.append(0 if len(self._indexes) == 0 else self._indexes[-1] + 1)
 
@@ -85,6 +92,8 @@ class Reader(Iterable[Event]):
     return self
 
   def __next__(self) -> Event:
+    self._check_workers()
+
     if not self._events.empty():
       return self._events.get()
 
@@ -115,3 +124,13 @@ class Reader(Iterable[Event]):
       self._consumed_mask[index] = True
 
     return True
+
+  def __del__(self):
+    self._stop_flag.set()
+
+    with self._need:
+      self._need.notify()
+
+    for worker in self._workers:
+      if worker.is_alive():
+        worker.join()
