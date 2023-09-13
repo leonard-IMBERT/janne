@@ -46,6 +46,12 @@ class Reader(Iterable[Event]):
                decoders: Union[List[type[IDecoder]],  type[IDecoder]],
                seed: int = 42,
                n_workers: int = 1):
+
+    self._p_config_generator = config_generator
+    self._p_decoders = decoders
+    self._p_seed = seed
+    self._p_n_workers = n_workers
+
     # pylint: disable=line-too-long
     self._random = random.Random(seed)
     self._np_random = np.random.default_rng(seed)
@@ -134,3 +140,15 @@ class Reader(Iterable[Event]):
     for worker in self._workers:
       if worker.is_alive():
         worker.join()
+
+  def regenerate(self, seed: Union[int, None] = None):
+    """Regenerate this reader using the same parameters except
+    the seed if specified
+
+    :param seed: The new seed to use. If None, use the same seed
+    """
+
+    return Reader(self._p_config_generator,
+                  self._p_decoders,
+                  seed if seed is not None else self._p_seed,
+                  self._p_n_workers)
