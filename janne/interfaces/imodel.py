@@ -6,7 +6,7 @@ observables.
 from abc import ABC, abstractmethod
 from typing import Any, TypeVar, Generic
 
-import numpy as np
+from numpy.typing import NDArray
 
 T = TypeVar("T")
 """Generic type representing the internal data type of the IModel
@@ -39,11 +39,21 @@ class IModel(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def migrate(self, raw_data: np.ndarray) -> T:
+  def migrate(self, raw_data: NDArray) -> T:
     """Migrate the data from numpy to the internal representation
 
     :param raw_data: The raw data to migrate
     :return: The raw_data in the representation of the internal computation
+     library
+    """
+    pass
+
+  @abstractmethod
+  def unmigrate(self, internal_data: T) -> NDArray:
+    """Migrate the data from the internal representation to numpy
+
+    :param internal_data: The raw data to migrate
+    :return: The internal_data in as a NDArray
      library
     """
     pass
@@ -75,7 +85,7 @@ class IModel(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def loss(self, prediction: T, truth: np.ndarray) -> T:
+  def loss(self, prediction: T, truth: NDArray) -> T:
     """Compute the loss between the prediction and the truth
 
     :param T prediction: The prediction produced from the ``predict method``

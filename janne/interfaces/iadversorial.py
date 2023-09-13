@@ -7,7 +7,7 @@ truth
 from abc import ABC, abstractmethod
 from typing import Any, Generic, TypeVar
 
-import numpy as np
+from numpy.typing import NDArray
 
 T = TypeVar("T")
 
@@ -42,9 +42,29 @@ class IAdversorial(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def loss(self, truth: np.ndarray, prediction: T,
-           raw_data: np.ndarray, perturbated_data: T) -> T:
-    """Compute the loss of the adversorial algorithm
+  def migrate(self, raw_data: NDArray) -> T:
+    """Migrate the data from numpy to the internal representation
+
+    :param raw_data: The raw data to migrate
+    :return: The raw_data in the representation of the internal computation
+     library
+    """
+
+  @abstractmethod
+  def unmigrate(self, internal_data: T) -> NDArray:
+    """Migrate the data from the internal representation to numpy
+
+    :param internal_data: The raw data to migrate
+    :return: The internal_data in as a NDArray
+     library
+    """
+    pass
+
+
+  @abstractmethod
+  def adv_loss(self, truth: NDArray, prediction: NDArray,
+           raw_data: NDArray, perturbated_data: T) -> T:
+    """Compute the adversorial loss of the adversorial algorithm
 
     :param truth: The true prediction
     :param prediction: The prediction produced by the :class:`IModel`
@@ -53,6 +73,20 @@ class IAdversorial(ABC, Generic[T]):
     :return: The computed loss
     """
     pass
+
+  @abstractmethod
+  def reg_loss(self, truth: NDArray, prediction: NDArray,
+           raw_data: NDArray, perturbated_data: T) -> T:
+    """Compute the regularisation loss of the adversorial algorithm
+
+    :param truth: The true prediction
+    :param prediction: The prediction produced by the :class:`IModel`
+    :param raw_data: The raw data
+    :param perturbated_data: The data pertubated by this :class:`IAdversorial`
+    :return: The computed loss
+    """
+    pass
+
 
 
   @abstractmethod
