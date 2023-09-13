@@ -2,3 +2,4 @@
    :hidden:
 
   janne/janne
+  :members:
