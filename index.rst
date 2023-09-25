@@ -1,5 +1,5 @@
 .. toctree::
-   :hidden:
+   :maxdepth: 2
 
-  janne/janne
-  :members:
+   janne/janne
+

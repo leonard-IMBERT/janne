@@ -1,5 +1,6 @@
-from . import interfaces
-from . import trainer
+"""JANNE (Juno Adversorial Neural Network Experiment) is a project aimed to give a informal structure to implement
+Adversorial Neural Network (ANN) to run against reconstruction algorithms of JUNO
+"""
 from ._reader import Reader
 
-__all__ = ["Reader", "interfaces", "trainer"]
+__all__ = ["Reader"] 

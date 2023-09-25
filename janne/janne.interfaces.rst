@@ -7,16 +7,6 @@
    .. contents::
       :local:
 
-
-Submodules
-==========
-
-.. toctree::
-
-   janne.interfaces.iadversorial
-   janne.interfaces.idecoder
-   janne.interfaces.imodel
-
 .. currentmodule:: janne.interfaces
 
 

@@ -3,4 +3,4 @@ extensions = [
     'sphinx.ext.inheritance_diagram',
     'autoapi.sphinx'
 ]
-autoapi_modules = {'janne': None}
+autoapi_modules = {'janne': {'prune': True }}

@@ -1,4 +1,7 @@
 #!/bin/bash
+
+python3 --version
+
 function print_m {
   echo -e "\033[0;97m$1\033[m"
 }

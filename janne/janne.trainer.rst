@@ -7,14 +7,6 @@
    .. contents::
       :local:
 
-
-Submodules
-==========
-
-.. toctree::
-
-   janne.trainer._trainer
-
 .. currentmodule:: janne.trainer
 
 

@@ -1,30 +1,30 @@
+"""Internal module implementing the Reader class that automatically paralellise
+IDecoder
+"""
+import queue
 from typing import Any, Iterable, List, Optional, Tuple, Union
 
 import random
 import itertools
-from threading import Thread, Condition
-from threading import Event as AtomicBoolean
-from queue import Queue
+
+
+from multiprocessing import Process, Queue, Event as AtomicBoolean
+from multiprocessing.synchronize import Event as TAtomicBoolean
 
 import numpy as np
 
-from janne.interfaces.idecoder import IDecoder
+from .interfaces import IDecoder
 
 Event = Tuple[np.ndarray, Optional[np.ndarray]]
 
-def _decode_consumer(decoder: IDecoder, condition: Condition,
-                     event_queue: Queue[Event],
-                     stop_flag: AtomicBoolean,
+def _decode_consumer(tdecoder: type[IDecoder], config: Any, event_queue: Queue,
+                     stop_flag: TAtomicBoolean,
                      ):
-  with condition:
-    for event in decoder:
-      condition.wait()
-      if stop_flag.is_set():
-        condition.notify()
-        break
-      else:
-        event_queue.put(event)
-        condition.notify()
+  decoder = tdecoder()
+  decoder.initialize(config)
+  for event in decoder:
+    if stop_flag.is_set(): return
+    event_queue.put(event)
 
 
 
@@ -57,16 +57,15 @@ class Reader(Iterable[Event]):
     self._np_random = np.random.default_rng(seed)
 
     # Event storage and fetching
-    self._need = Condition()
-    self._events : Queue[Event] = Queue()
-    self._stop_flag: AtomicBoolean = AtomicBoolean()
+    self._events : Queue = Queue(10)
+    self._stop_flag: TAtomicBoolean = AtomicBoolean()
     self._stop_flag.clear()
 
     self._n_workers = n_workers
 
     # Decoders and their threads
-    self._decoders : List[IDecoder] = []
-    self._workers : List[Thread] = []
+    self._decoders : List[Tuple[Any, type[IDecoder]]] = []
+    self._workers : List[Union[Process, None]] = []
     self._consumed_mask = []
     self._indexes = []
 
@@ -74,21 +73,21 @@ class Reader(Iterable[Event]):
 
     # Initialize workers
     for (config, decoder) in zip(config_generator, decoders_it):
-      dec = decoder()
-      dec.initialize(config)
-      self._decoders.append(dec)
-      self._workers.append(Thread(target=_decode_consumer,
-                                  args=(dec, self._need, self._events, self._stop_flag)))
-      self._consumed_mask.append(False)
-      self._indexes.append(0 if len(self._indexes) == 0 else self._indexes[-1] + 1)
+      self._decoders.append((config, decoder))
+      self._workers.append(None)
 
-    self._indexes = np.array(self._indexes)
-    self._consumed_mask = np.array(self._consumed_mask)
+    self._consumed_mask = np.full((len(self._decoders)), False)
+    self._indexes = np.array(range(len(self._decoders)))
 
     # Start the threads
-    while sum(map(lambda thread: thread.is_alive(), self._workers)) < self._n_workers:
+    while sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) < self._n_workers:
       index = self._np_random.choice(self._indexes[np.invert(self._consumed_mask)])
 
+      dec_config, dec_typ = self._decoders[index]
+      self._workers[index] = Process(
+          target=_decode_consumer,
+          args=(dec_typ, dec_config, self._events, self._stop_flag)
+          )
       self._workers[index].start()
       self._consumed_mask[index] = True
 
@@ -98,48 +97,54 @@ class Reader(Iterable[Event]):
     return self
 
   def __next__(self) -> Event:
-    self._check_workers()
-
-    if not self._events.empty():
-      return self._events.get()
+    while True:
+      self._check_workers()
 
     # If every thread is dead (never start or finished reading) and every
     # file have been consumed, raise Stop Iteration
-    if (sum(map(lambda thread: thread.is_alive(), self._workers)) == 0
-        and sum(np.invert(self._consumed_mask)) == 0):
-      raise StopIteration
+      if (sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) == 0
+          and sum(np.invert(self._consumed_mask)) == 0
+          and self._events.empty()):
+        raise StopIteration
 
-
-    # Notify then release lock
-    with self._need:
-      self._need.notify()
-      self._need.wait()
-
-    # Try to aquire the lock again
-
-    return self._events.get()
+      try:
+        return self._events.get(True, 1/100)
+      except queue.Empty:
+        continue
 
   def _check_workers(self) -> bool:
-    while sum(map(lambda thread: thread.is_alive(), self._workers)) < self._n_workers:
+    while sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) < self._n_workers:
       avail_files = self._indexes[np.invert(self._consumed_mask)]
       if len(avail_files) <= 0:
         return False
       index = self._np_random.choice(avail_files)
 
+
+      dec_config, dec_typ = self._decoders[index]
+      self._workers[index] = Process(
+          target=_decode_consumer,
+          args=(dec_typ, dec_config, self._events, self._stop_flag)
+          )
       self._workers[index].start()
       self._consumed_mask[index] = True
+
+      while sum(map(lambda _:  _ is not None and _.is_alive(), self._workers)) == 0:
+        continue
 
     return True
 
   def __del__(self):
     self._stop_flag.set()
 
-    with self._need:
-      self._need.notify()
+
+    while not self._events.empty():
+      self._events.get()
 
     for worker in self._workers:
-      if worker.is_alive():
+      if worker is not None and worker.is_alive():
         worker.join()
+    self._events.close()
+    self._events.join_thread()
 
   def regenerate(self, seed: Union[int, None] = None):
     """Regenerate this reader using the same parameters except
@@ -148,7 +153,7 @@ class Reader(Iterable[Event]):
     :param seed: The new seed to use. If None, use the same seed
     """
 
-    return Reader(self._p_config_generator,
+    return Reader(list(map(lambda _: _[0] , self._decoders)),
                   self._p_decoders,
                   seed if seed is not None else self._p_seed,
                   self._p_n_workers)

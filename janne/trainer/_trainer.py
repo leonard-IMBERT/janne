@@ -28,7 +28,10 @@ def _generate_readers(reader: Reader) -> Iterator[Reader]:
 def _get_events_from_repeated_reader(reader: Reader, batch_size: int) -> Iterator[Tuple[NDArray, NDArray]]:
 
   r_generator = _generate_readers(reader)
-  curr_generator = next(r_generator)
+  try:
+    curr_generator = next(r_generator)
+  except StopIteration:
+    return
 
   def _get_events(init_events: Union[List[NDArray], None] = None,
                   init_truths: Union[List[NDArray], None] = None) -> Tuple[NDArray, NDArray]:

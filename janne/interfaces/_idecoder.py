@@ -58,3 +58,11 @@ class IDecoder(ABC):
     """
 
     return next(self)
+
+  @abstractmethod
+  def config(self) -> Any:
+    """Return the config used for this IDecoder
+
+    :return: The config used for this event
+    """
+    pass
