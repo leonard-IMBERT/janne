@@ -7,6 +7,7 @@ from typing import Optional, Tuple, Any
 from abc import ABC, abstractmethod
 
 import numpy as np
+import numpy.typing as npt
 
 class IDecoder(ABC):
   """Informal interface representing a decoder. It should not be instacied but
@@ -41,7 +42,7 @@ class IDecoder(ABC):
     return self
 
   @abstractmethod
-  def __next__(self) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+  def __next__(self) -> Tuple[npt.NDArray[np.float64], Optional[npt.NDArray[np.float64]]]:
     """Return the next element that have been decoded
 
     :return: A tuple containing the element and the corresponding truth if
@@ -49,7 +50,7 @@ class IDecoder(ABC):
     """
     pass
 
-  def next_event(self) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+  def next_event(self) -> Tuple[npt.NDArray[np.float64], Optional[npt.NDArray[np.float64]]]:
     """Return the next event
 
     :return: A tuple containing the element and the corresponding truth if

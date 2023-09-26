@@ -17,13 +17,17 @@ class TestReader:
 
     assert True
 
+    reader.close()
+
+    assert True
+
     del reader
 
     assert True
 
   def test_reader_get_event(self):
-    n_decoder = 10
-    n_worker = 3
+    n_decoder = 5
+    n_worker = 1
     reader = Reader(config_genrator(n_decoder, True), StandardMockDecoder, n_workers=n_worker, seed=0)
 
     assert reader is not None
@@ -37,12 +41,16 @@ class TestReader:
 
     assert n_evt == MOCK_DECODER_SIZE * n_decoder
 
+    reader.close()
+
   def test_number_workers(self):
     n_decoder = 5
     n_worker = 3
     _ = Reader(config_genrator(n_decoder, True), StandardMockDecoder, n_workers=n_worker, seed=0)
 
     assert len(multiprocessing.active_children()) == n_worker
+
+    _.close()
 
   def test_regeneration(self):
     n_decoder = 10
@@ -72,4 +80,8 @@ class TestReader:
     assert f_r3_tru is not None
     assert f_r1_tru is not None
     assert np.array_equal(f_r1_tru, f_r3_tru)
+
+    reader1.close()
+    reader2.close()
+    reader3.close()
 

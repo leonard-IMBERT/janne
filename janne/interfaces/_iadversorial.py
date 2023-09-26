@@ -32,10 +32,10 @@ class IAdversorial(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def perturbate(self, raw_data: T) -> T:
-    """Perturbate the raw data
+  def perturbate(self, internal_data: T) -> T:
+    """Perturbate the internal data
 
-    :param T raw_data: The raw data to perturbate
+    :param T internal_data: The internal data to perturbate
     :return: The perturbated data in a format that can be understood by
      the :class:`IModel`
     """
@@ -95,5 +95,17 @@ class IAdversorial(ABC, Generic[T]):
 
     :param T loss: The loss that should have been computed with the
      loss method
+    """
+    pass
+
+  @abstractmethod
+  def combine_losses(self, adv_loss: T, reg_loss: T) -> T:
+    """Combine the losses
+
+    Seems trivial but it's better to explicit how to do it
+
+    :param T adv_loss: The computed adversorial loss
+    :param T reg_loss: The computed regularistation loss
+    :return: The combined loss
     """
     pass

@@ -18,30 +18,15 @@ class ANNTrainingLoopConfig:
   n_cs_event: int
 
 
-def _generate_readers(reader: Reader) -> Iterator[Reader]:
-  yield reader
-
-  while True:
-    yield reader.regenerate()
-
-
 def _get_events_from_repeated_reader(reader: Reader, batch_size: int) -> Iterator[Tuple[NDArray, NDArray]]:
-
-  r_generator = _generate_readers(reader)
-  try:
-    curr_generator = next(r_generator)
-  except StopIteration:
-    return
 
   def _get_events(init_events: Union[List[NDArray], None] = None,
                   init_truths: Union[List[NDArray], None] = None) -> Tuple[NDArray, NDArray]:
-    nonlocal r_generator
-    nonlocal curr_generator
 
     events: List[NDArray] = init_events if init_events is not None else []
     truths: List[NDArray] = init_truths if init_truths is not None else []
 
-    for event, truth in curr_generator:
+    for event, truth in reader:
       if truth is None:
         raise RuntimeError("CS Reader gave event without truth, cannot"
                            " train without truth")
@@ -54,7 +39,7 @@ def _get_events_from_repeated_reader(reader: Reader, batch_size: int) -> Iterato
 
     # If reader ended but not enough events
     if len(events) < batch_size:
-      curr_generator = next(r_generator)
+      reader.regenerate()
 
       #continuer filling
       return _get_events(events, truths)
@@ -68,7 +53,7 @@ def _get_events_from_repeated_reader(reader: Reader, batch_size: int) -> Iterato
 
 def ann_training_loop(reader: Reader, cs_reader: Reader,
                       ann: IAdversorial, reco: IModel,
-                      config : ANNTrainingLoopConfig) -> None:
+                      config : ANNTrainingLoopConfig, verbose=False) -> None:
 
   epoch = 0
   n_batches = 0
@@ -76,6 +61,8 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
   event_batch_generator = _get_events_from_repeated_reader(reader, config.batch_size)
   cs_batch_generator = _get_events_from_repeated_reader(cs_reader, config.n_cs_event)
 
+  if verbose:
+    print("\nStarting training the ANN")
   while epoch < config.n_epochs:
 
     # Contruct batches
@@ -88,11 +75,11 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
 
     # Run the reco
     model_b_p_events = reco.migrate(np_perturbated)
-    model_prediction = reco.migrate(reco.predict(model_b_p_events))
+    model_prediction = reco.predict(model_b_p_events)
 
     adv_loss = ann.adv_loss(
             truth= b_truths,
-            prediction= model_prediction,
+            prediction= reco.unmigrate(model_prediction),
             raw_data= b_events,
             perturbated_data= ann_perturbated)
 
@@ -106,17 +93,24 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
 
     # Run the reco on cs
     model_cs_p_event = reco.migrate(np_cs_perturbated)
-    model_cs_prediction = reco.migrate(reco.predict(model_cs_p_event))
+    model_cs_prediction = reco.predict(model_cs_p_event)
 
     reg_loss = ann.reg_loss(
             truth= cs_truths,
-            prediction= model_cs_prediction,
+            prediction= reco.unmigrate(model_cs_prediction),
             raw_data= cs_events,
-            perturbated_data= ann_perturbated)
+            perturbated_data= ann_cs_perturbated)
 
-    ann.back_propagate(adv_loss + reg_loss)
+    ann.back_propagate(ann.combine_losses(adv_loss, reg_loss))
 
     n_batches = (n_batches + 1) % config.batch_per_epoch
 
-    if n_batches == 0: epoch += 1
+    if verbose:
+      print(f"\33[2K\rEpoch {epoch+1}/{config.n_epochs} : {n_batches}/{config.batch_per_epoch}", end="")
+
+    if n_batches == 0:
+      epoch += 1
+
+  reader.close()
+  cs_reader.close()
 

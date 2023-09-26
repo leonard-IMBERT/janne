@@ -20,7 +20,7 @@ def config_genrator(n_dec: int, w_truth: bool, offset=False):
     yield StandardMockDecoderConfig(f"/some/file/with.input.${i}.root", i % 2, w_truth, i if offset else 0)
 
 
-MOCK_DECODER_SIZE=100
+MOCK_DECODER_SIZE=10000
 
 class StandardMockDecoder(IDecoder):
   """A standard mock decoder
@@ -44,8 +44,8 @@ class StandardMockDecoder(IDecoder):
 
     self._cur_event += 1
 
-    return (np.full((100, 5), self._cur_event + self._config.offset),
-            np.full((4), self._cur_event) if self._config.w_truth else None)
+    return (np.full((100, 5), self._cur_event + self._config.offset, dtype=np.float64),
+            np.full((4), self._cur_event, np.float64) if self._config.w_truth else None)
 
   def config(self) -> Any:
     return self._config

@@ -7,7 +7,6 @@ from typing import Any, Iterable, List, Optional, Tuple, Union
 import random
 import itertools
 
-
 from multiprocessing import Process, Queue, Event as AtomicBoolean
 from multiprocessing.synchronize import Event as TAtomicBoolean
 
@@ -23,8 +22,12 @@ def _decode_consumer(tdecoder: type[IDecoder], config: Any, event_queue: Queue,
   decoder = tdecoder()
   decoder.initialize(config)
   for event in decoder:
-    if stop_flag.is_set(): return
-    event_queue.put(event)
+    if stop_flag.is_set():
+      return
+    event_queue.put((event[0].shape, event[0].tobytes(),
+                     event[1].shape if event[1] is not None else None,
+                     event[1].tobytes() if event[1] is not None else None))
+
 
 
 
@@ -45,19 +48,22 @@ class Reader(Iterable[Event]):
   def __init__(self, config_generator: Union[List[Any],  Iterable[Any]],
                decoders: Union[List[type[IDecoder]],  type[IDecoder]],
                seed: int = 42,
-               n_workers: int = 1):
+               n_workers: int = 1,
+               buffer: int = 1000):
 
     self._p_config_generator = config_generator
     self._p_decoders = decoders
     self._p_seed = seed
     self._p_n_workers = n_workers
 
+    self._buffer_len = buffer
+
     # pylint: disable=line-too-long
     self._random = random.Random(seed)
     self._np_random = np.random.default_rng(seed)
 
     # Event storage and fetching
-    self._events : Queue = Queue(10)
+    self._events : Queue = Queue(buffer)
     self._stop_flag: TAtomicBoolean = AtomicBoolean()
     self._stop_flag.clear()
 
@@ -100,17 +106,18 @@ class Reader(Iterable[Event]):
     while True:
       self._check_workers()
 
-    # If every thread is dead (never start or finished reading) and every
-    # file have been consumed, raise Stop Iteration
-      if (sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) == 0
-          and sum(np.invert(self._consumed_mask)) == 0
-          and self._events.empty()):
-        raise StopIteration
-
       try:
-        return self._events.get(True, 1/100)
-      except queue.Empty:
-        continue
+        dshape, data, tshape, truth = self._events.get(True, 1/2)
+        return (np.ndarray(shape=dshape, dtype=np.float64, buffer=data),
+                np.ndarray(shape=tshape, dtype=np.float64, buffer=truth) if truth is not None else None)
+      except queue.Empty as exc:
+
+        # If every thread is dead (never start or finished reading) and every
+        # file have been consumed, raise Stop Iteration
+        if (sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) == 0
+            and sum(np.invert(self._consumed_mask)) == 0
+            and self._events.empty()):
+          raise StopIteration from exc
 
   def _check_workers(self) -> bool:
     while sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) < self._n_workers:
@@ -133,18 +140,23 @@ class Reader(Iterable[Event]):
 
     return True
 
-  def __del__(self):
+  def close(self):
     self._stop_flag.set()
 
-
-    while not self._events.empty():
-      self._events.get()
-
+    while sum(map(lambda _: _.is_alive() if _ is not None else False, self._workers)) > 0:
+      try:
+        self._events.get(True, 1/10)
+      except queue.Empty:
+        continue
     for worker in self._workers:
       if worker is not None and worker.is_alive():
         worker.join()
+
     self._events.close()
     self._events.join_thread()
+
+  def __del__(self):
+    self.close()
 
   def regenerate(self, seed: Union[int, None] = None):
     """Regenerate this reader using the same parameters except
@@ -153,7 +165,36 @@ class Reader(Iterable[Event]):
     :param seed: The new seed to use. If None, use the same seed
     """
 
-    return Reader(list(map(lambda _: _[0] , self._decoders)),
-                  self._p_decoders,
-                  seed if seed is not None else self._p_seed,
-                  self._p_n_workers)
+    self.close()
+
+    self._random = random.Random(seed if seed is not None else self._p_seed)
+    self._np_random = np.random.default_rng(seed if seed is not None else self._p_seed)
+
+    self._stop_flag.clear()
+
+    self._workers : List[Union[Process, None]] = []
+    self._consumed_mask = []
+    self._indexes = []
+
+
+    self._events : Queue = Queue(self._buffer_len)
+
+    # Initialize workers
+    self._workers = [None for _ in self._decoders]
+
+    self._consumed_mask = np.full((len(self._decoders)), False)
+    self._indexes = np.array(range(len(self._decoders)))
+
+    # Start the threads
+    while sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) < self._n_workers:
+      index = self._np_random.choice(self._indexes[np.invert(self._consumed_mask)])
+
+      dec_config, dec_typ = self._decoders[index]
+      self._workers[index] = Process(
+          target=_decode_consumer,
+          args=(dec_typ, dec_config, self._events, self._stop_flag)
+          )
+      self._workers[index].start()
+      self._consumed_mask[index] = True
+
+    return self

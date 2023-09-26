@@ -3,4 +3,4 @@ Adversorial Neural Network (ANN) to run against reconstruction algorithms of JUN
 """
 from ._reader import Reader
 
-__all__ = ["Reader"] 
+__all__ = ["Reader"]
