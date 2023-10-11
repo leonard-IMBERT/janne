@@ -9,7 +9,8 @@ class MockInternalRepresentation:
   """Mock internal representation. This is basically a wrapper around a numpy array here
   """
   def __init__(self, data: NDArray):
-    if not isinstance(data, numpy.ndarray):
+    if not isinstance(data, numpy.ndarray) and not isinstance(data, numpy.generic):
+      print("Data: ", repr(data))
       raise RuntimeError("Got an error here")
     self._data = data
 

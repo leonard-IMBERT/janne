@@ -1,7 +1,8 @@
 """Provide training loop for the ANN
 """
+from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Iterator, List, Tuple, Union
+from typing import Iterator, Protocol, Tuple, TypeVar, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -18,89 +19,94 @@ class ANNTrainingLoopConfig:
   n_cs_event: int
 
 
-def _get_events_from_repeated_reader(reader: Reader, batch_size: int) -> Iterator[Tuple[NDArray, NDArray]]:
+def _get_events_from_repeated_reader(reader: Reader) -> Iterator[Tuple[NDArray, NDArray]]:
 
-  def _get_events(init_events: Union[List[NDArray], None] = None,
-                  init_truths: Union[List[NDArray], None] = None) -> Tuple[NDArray, NDArray]:
+  def _get_events() -> Tuple[NDArray, NDArray]:
 
-    events: List[NDArray] = init_events if init_events is not None else []
-    truths: List[NDArray] = init_truths if init_truths is not None else []
-
-    for event, truth in reader:
+    try:
+      evt, truth = next(reader)
       if truth is None:
-        raise RuntimeError("Reader gave event without truth, cannot"
-                           " train without truth")
-      events.append(event)
-      truths.append(truth)
+        raise RuntimeError("Cannot train without truth")
 
-      # If batch full
-      if len(events) == batch_size:
-        break
-
-    # If reader ended but not enough events
-    if len(events) < batch_size:
+      return (evt, truth)
+    except StopIteration:
       reader.regenerate()
+      return _get_events()
 
-      #continuer filling
-      return _get_events(events, truths)
-
-    #Cs batch is full
-    return (np.array(events),
-            np.array(truths))
   while True:
     yield _get_events()
 
+Sa = TypeVar("Sa", bound="SupportsAdd")
+class SupportsAdd(Protocol):
+  @abstractmethod
+  def __add__(self, other: Sa) -> Sa:
+    pass
 
+Ta = TypeVar("Ta", bound=SupportsAdd)
+Tm = TypeVar("Tm", bound=SupportsAdd)
 def ann_training_loop(reader: Reader, cs_reader: Reader,
-                      ann: IAdversorial, reco: IModel,
+                      ann: IAdversorial[Ta], reco: IModel[Tm],
                       config : ANNTrainingLoopConfig, verbose=False) -> None:
 
   epoch = 0
   n_batches = 0
 
-  event_batch_generator = _get_events_from_repeated_reader(reader, config.batch_size)
-  cs_batch_generator = _get_events_from_repeated_reader(cs_reader, config.n_cs_event)
+  event_batch_generator = _get_events_from_repeated_reader(reader)
+  cs_batch_generator = _get_events_from_repeated_reader(cs_reader)
 
   if verbose:
     print("\nStarting training the ANN")
   while epoch < config.n_epochs:
 
-    # Contruct batches
-    b_events, b_truths = next(event_batch_generator)
+
+    adv_loss: Union[Ta, None] = None
 
     # Run the ann
-    ann_b_events = ann.migrate(b_events)
-    ann_perturbated = ann.perturbate(ann_b_events)
-    np_perturbated = ann.unmigrate(ann_perturbated)
+    for _ in range(config.batch_size):
+      # Contruct batches
+      events, truths = next(event_batch_generator)
 
-    # Run the reco
-    model_b_p_events = reco.migrate(np_perturbated)
-    model_prediction = reco.predict(model_b_p_events)
+      ann_events = ann.migrate(events)
+      ann_perturbated = ann.perturbate(ann_events)
+      np_perturbated = ann.unmigrate(ann_perturbated)
 
-    adv_loss = ann.adv_loss(
-            truth= b_truths,
-            prediction= reco.unmigrate(model_prediction),
-            raw_data= b_events,
-            perturbated_data= ann_perturbated)
+      # Run the reco
+      model_p_events = reco.migrate(np_perturbated)
+      model_prediction = reco.predict(model_p_events)
 
-    # Construct cs_batches
-    cs_events, cs_truths = next(cs_batch_generator)
+      e_adv_loss = ann.adv_loss(
+              truth= truths,
+              prediction= reco.unmigrate(model_prediction),
+              raw_data= events,
+              perturbated_data= ann_perturbated)
 
-    # Run the ann on cs
-    ann_cs_events = ann.migrate(cs_events)
-    ann_cs_perturbated = ann.perturbate(ann_cs_events)
-    np_cs_perturbated = ann.unmigrate(ann_cs_perturbated)
+      adv_loss = e_adv_loss if adv_loss is None else adv_loss + e_adv_loss
 
-    # Run the reco on cs
-    model_cs_p_event = reco.migrate(np_cs_perturbated)
-    model_cs_prediction = reco.predict(model_cs_p_event)
+    reg_loss: Union[Ta, None] = None
+    for _ in range(config.n_cs_event):
+      # Construct cs_batches
+      cs_events, cs_truths = next(cs_batch_generator)
 
-    reg_loss = ann.reg_loss(
-            truth= cs_truths,
-            prediction= reco.unmigrate(model_cs_prediction),
-            raw_data= cs_events,
-            perturbated_data= ann_cs_perturbated)
+      # Run the ann on cs
+      ann_cs_events = ann.migrate(cs_events)
+      ann_cs_perturbated = ann.perturbate(ann_cs_events)
+      np_cs_perturbated = ann.unmigrate(ann_cs_perturbated)
 
+      # Run the reco on cs
+      model_cs_p_event = reco.migrate(np_cs_perturbated)
+      model_cs_prediction = reco.predict(model_cs_p_event)
+
+      e_reg_loss = ann.reg_loss(
+              truth= cs_truths,
+              prediction= reco.unmigrate(model_cs_prediction),
+              raw_data= cs_events,
+              perturbated_data= ann_cs_perturbated)
+
+      reg_loss = e_reg_loss if reg_loss is None else reg_loss + e_reg_loss
+
+
+    if reg_loss is None or adv_loss is None:
+      raise RuntimeError("Seems that the batch size is 0, cannot run with batch size of 0")
     ann.back_propagate(ann.combine_losses(adv_loss, reg_loss))
 
     n_batches = (n_batches + 1) % config.batch_per_epoch
@@ -123,10 +129,10 @@ class ModelTrainingLoopConfig:
 
   validation_n_batch: int
 
-def model_training_loop(reader: Reader, reco: IModel,
+def model_training_loop(reader: Reader, reco: IModel[Tm],
                         config: ModelTrainingLoopConfig, verbose=False) -> None:
 
-  event_batch_generator = _get_events_from_repeated_reader(reader, config.batch_size)
+  event_batch_generator = _get_events_from_repeated_reader(reader)
 
   validation_events = []
   validation_truth = []
@@ -144,15 +150,23 @@ def model_training_loop(reader: Reader, reco: IModel,
     print("\nStarting training the Model")
 
   for epoch in range(config.n_epochs):
+
+    loss: Union[Tm, None] = None
     for n_batches in range(config.batch_per_epoch):
 
-      b_evt, b_truth = next(event_batch_generator)
+      for _ in range(config.batch_size):
 
-      t_b_evt = reco.transform(reco.migrate(b_evt))
-      model_pred = reco.predict(t_b_evt)
+        evt, truth = next(event_batch_generator)
 
-      loss = reco.loss(model_pred, b_truth)
+        t_evt = reco.transform(reco.migrate(evt))
+        model_pred = reco.predict(t_evt)
 
+        e_loss = reco.loss(model_pred, truth)
+
+        loss = e_loss if loss is None else loss + e_loss
+
+      if loss is None:
+        raise RuntimeError("Seems that the batch size is 0, cannot run with batch size of 0")
       reco.back_propagate(loss)
 
       if verbose:

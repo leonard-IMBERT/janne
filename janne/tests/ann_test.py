@@ -44,7 +44,7 @@ class MockAdversorial(IAdversorial[MockInternalRepresentation]):
   def perturbate(self, internal_data: MockInternalRepresentation) -> MockInternalRepresentation:
     if self._config is None:
       raise RuntimeError("MockAdversorial hasn't been initialized")
-    return internal_data.apply(lambda d: np.concatenate((d[:, :, :-1], d[:, :, -1:] + self._shift), axis=-1))
+    return internal_data.apply(lambda d: np.concatenate((d[:, :-1], d[:, -1:] + self._shift), axis=-1))
 
   def migrate(self, raw_data: NDArray) -> MockInternalRepresentation:
     if self._config is None:
