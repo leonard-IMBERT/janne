@@ -28,7 +28,7 @@ def _get_events_from_repeated_reader(reader: Reader, batch_size: int) -> Iterato
 
     for event, truth in reader:
       if truth is None:
-        raise RuntimeError("CS Reader gave event without truth, cannot"
+        raise RuntimeError("Reader gave event without truth, cannot"
                            " train without truth")
       events.append(event)
       truths.append(truth)
@@ -114,3 +114,48 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
   reader.close()
   cs_reader.close()
 
+
+@dataclass
+class ModelTrainingLoopConfig:
+  n_epochs: int
+  batch_size: int
+  batch_per_epoch: int
+
+  validation_n_batch: int
+
+def model_training_loop(reader: Reader, reco: IModel,
+                        config: ModelTrainingLoopConfig, verbose=False) -> None:
+
+  event_batch_generator = _get_events_from_repeated_reader(reader, config.batch_size)
+
+  validation_events = []
+  validation_truth = []
+  for _ in range(config.validation_n_batch):
+    evt, truth = next(event_batch_generator)
+    validation_events.append(evt)
+    validation_truth.append(truth)
+
+  validation_events = np.concatenate(validation_events, axis=0)
+  validation_truth = np.concatenate(validation_truth, axis=0)
+
+  n_batches = 0
+
+  if verbose:
+    print("\nStarting training the Model")
+
+  for epoch in range(config.n_epochs):
+    for n_batches in range(config.batch_per_epoch):
+
+      b_evt, b_truth = next(event_batch_generator)
+
+      t_b_evt = reco.transform(reco.migrate(b_evt))
+      model_pred = reco.predict(t_b_evt)
+
+      loss = reco.loss(model_pred, b_truth)
+
+      reco.back_propagate(loss)
+
+      if verbose:
+        print(f"\33[2K\rEpoch {epoch+1}/{config.n_epochs} : {n_batches}/{config.batch_per_epoch}", end="")
+
+  reader.close()
