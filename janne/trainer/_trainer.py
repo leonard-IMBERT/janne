@@ -151,9 +151,9 @@ def model_training_loop(reader: Reader, reco: IModel[Tm],
 
   for epoch in range(config.n_epochs):
 
-    loss: Union[Tm, None] = None
     for n_batches in range(config.batch_per_epoch):
 
+      loss: Union[Tm, None] = None
       for _ in range(config.batch_size):
 
         evt, truth = next(event_batch_generator)
