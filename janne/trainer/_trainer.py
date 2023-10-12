@@ -117,10 +117,6 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
     if n_batches == 0:
       epoch += 1
 
-  reader.close()
-  cs_reader.close()
-
-
 @dataclass
 class ModelTrainingLoopConfig:
   n_epochs: int
@@ -171,5 +167,3 @@ def model_training_loop(reader: Reader, reco: IModel[Tm],
 
       if verbose:
         print(f"\33[2K\rEpoch {epoch+1}/{config.n_epochs} : {n_batches}/{config.batch_per_epoch}", end="")
-
-  reader.close()
