@@ -5,7 +5,7 @@ so that a :class:`IModel` does not recontruct correctly the
 truth
 """
 from abc import ABC, abstractmethod
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, List
 
 from numpy.typing import NDArray
 
@@ -42,7 +42,7 @@ class IAdversorial(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def migrate(self, raw_data: NDArray) -> T:
+  def migrate(self, raw_data: List[NDArray]) -> T:
     """Migrate the data from numpy to the internal representation
 
     :param raw_data: The raw data to migrate
@@ -51,7 +51,7 @@ class IAdversorial(ABC, Generic[T]):
     """
 
   @abstractmethod
-  def unmigrate(self, internal_data: T) -> NDArray:
+  def unmigrate(self, internal_data: T) -> List[NDArray]:
     """Migrate the data from the internal representation to numpy
 
     :param internal_data: The raw data to migrate
@@ -62,8 +62,8 @@ class IAdversorial(ABC, Generic[T]):
 
 
   @abstractmethod
-  def adv_loss(self, truth: NDArray, prediction: NDArray,
-           raw_data: NDArray, perturbated_data: T) -> T:
+  def adv_loss(self, truth: List[NDArray], prediction: List[NDArray],
+           raw_data: List[NDArray], perturbated_data: T) -> T:
     """Compute the adversorial loss of the adversorial algorithm
 
     :param truth: The true prediction
@@ -75,8 +75,8 @@ class IAdversorial(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def reg_loss(self, truth: NDArray, prediction: NDArray,
-           raw_data: NDArray, perturbated_data: T) -> T:
+  def reg_loss(self, truth: List[NDArray], prediction: List[NDArray],
+           raw_data: List[NDArray], perturbated_data: T) -> T:
     """Compute the regularisation loss of the adversorial algorithm
 
     :param truth: The true prediction

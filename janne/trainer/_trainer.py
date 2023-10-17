@@ -2,7 +2,9 @@
 """
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Iterator, Protocol, Tuple, TypeVar, Union
+from typing import (Callable, Generic, Iterator, Optional,
+                    Protocol, Tuple, TypeVar, OrderedDict,
+                    List)
 
 import numpy as np
 from numpy.typing import NDArray
@@ -36,17 +38,44 @@ def _get_events_from_repeated_reader(reader: Reader) -> Iterator[Tuple[NDArray, 
   while True:
     yield _get_events()
 
+def _accumulate_event(it: Iterator[Tuple[NDArray, NDArray]], batch_size: int) -> Tuple[List[NDArray], List[NDArray]]:
+  if batch_size <= 0:
+    raise ValueError("Batch size must be positive")
+
+  evts: List[NDArray] = []
+  truths: List[NDArray] = []
+
+  while len(evts) < batch_size:
+    evt, truth = next(it)
+    evts.append(evt)
+    truths.append(truth)
+
+  return evts, truths
+
+
+
 Sa = TypeVar("Sa", bound="SupportsAdd")
 class SupportsAdd(Protocol):
   @abstractmethod
   def __add__(self, other: Sa) -> Sa:
     pass
 
+T = TypeVar("T")
+@dataclass
+class MonitoringVars(Generic[T]):
+  variables: OrderedDict[str, Callable[[List[T], List[T], List[T]], float]]
+
+  callback: Callable[[str, float], None]
+
+
+
 Ta = TypeVar("Ta", bound=SupportsAdd)
 Tm = TypeVar("Tm", bound=SupportsAdd)
 def ann_training_loop(reader: Reader, cs_reader: Reader,
                       ann: IAdversorial[Ta], reco: IModel[Tm],
-                      config : ANNTrainingLoopConfig, verbose=False) -> None:
+                      config : ANNTrainingLoopConfig, verbose=False,
+                      cs_monitoring: Optional[MonitoringVars[NDArray[np.float64]]] = None,
+                      evt_monitoring: Optional[MonitoringVars[NDArray[np.float64]]] = None) -> None:
 
   epoch = 0
   n_batches = 0
@@ -58,51 +87,51 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
     print("\nStarting training the ANN")
   while epoch < config.n_epochs:
 
-
-    adv_loss: Union[Ta, None] = None
-
     # Run the ann
-    for _ in range(config.batch_size):
-      # Contruct batches
-      events, truths = next(event_batch_generator)
 
-      ann_events = ann.migrate(events)
-      ann_perturbated = ann.perturbate(ann_events)
-      np_perturbated = ann.unmigrate(ann_perturbated)
+    events, truths = _accumulate_event(event_batch_generator, config.batch_size)
 
-      # Run the reco
-      model_p_events = reco.migrate(np_perturbated)
-      model_prediction = reco.predict(model_p_events)
+    ann_events = ann.migrate(events)
+    ann_perturbated = ann.perturbate(ann_events)
+    np_perturbated = ann.unmigrate(ann_perturbated)
 
-      e_adv_loss = ann.adv_loss(
-              truth= truths,
-              prediction= reco.unmigrate(model_prediction),
-              raw_data= events,
-              perturbated_data= ann_perturbated)
+    # Run the reco
+    model_t_events = reco.transform(np_perturbated)
+    model_p_events = reco.migrate(model_t_events)
+    model_prediction = reco.predict(model_p_events)
 
-      adv_loss = e_adv_loss if adv_loss is None else adv_loss + e_adv_loss
+    adv_loss = ann.adv_loss(
+            truth= truths,
+            prediction= reco.unmigrate(model_prediction),
+            raw_data= events,
+            perturbated_data= ann_perturbated)
 
-    reg_loss: Union[Ta, None] = None
-    for _ in range(config.n_cs_event):
-      # Construct cs_batches
-      cs_events, cs_truths = next(cs_batch_generator)
+    cs_events, cs_truths = _accumulate_event(cs_batch_generator, config.n_cs_event)
 
-      # Run the ann on cs
-      ann_cs_events = ann.migrate(cs_events)
-      ann_cs_perturbated = ann.perturbate(ann_cs_events)
-      np_cs_perturbated = ann.unmigrate(ann_cs_perturbated)
+    # Run the ann on cs
+    ann_cs_events = ann.migrate(cs_events)
+    ann_cs_perturbated = ann.perturbate(ann_cs_events)
+    np_cs_perturbated = ann.unmigrate(ann_cs_perturbated)
 
-      # Run the reco on cs
-      model_cs_p_event = reco.migrate(np_cs_perturbated)
-      model_cs_prediction = reco.predict(model_cs_p_event)
+    # Run the reco on cs
+    model_cs_p_event = reco.migrate(np_cs_perturbated)
+    model_cs_prediction = reco.predict(model_cs_p_event)
 
-      e_reg_loss = ann.reg_loss(
-              truth= cs_truths,
-              prediction= reco.unmigrate(model_cs_prediction),
-              raw_data= cs_events,
-              perturbated_data= ann_cs_perturbated)
+    reg_loss = ann.reg_loss(
+            truth= cs_truths,
+            prediction= reco.unmigrate(model_cs_prediction),
+            raw_data= cs_events,
+            perturbated_data= ann_cs_perturbated)
 
-      reg_loss = e_reg_loss if reg_loss is None else reg_loss + e_reg_loss
+
+
+    if cs_monitoring:
+      for name, fun in cs_monitoring.variables.items():
+        cs_monitoring.callback(name, fun(ann.unmigrate(reg_loss), cs_truths, reco.unmigrate(model_cs_prediction)))
+
+    if evt_monitoring:
+      for name, fun in evt_monitoring.variables.items():
+        evt_monitoring.callback(name, fun(ann.unmigrate(reg_loss), truths, reco.unmigrate(model_prediction)))
 
 
     if reg_loss is None or adv_loss is None:
@@ -126,7 +155,8 @@ class ModelTrainingLoopConfig:
   validation_n_batch: int
 
 def model_training_loop(reader: Reader, reco: IModel[Tm],
-                        config: ModelTrainingLoopConfig, verbose=False) -> None:
+                        config: ModelTrainingLoopConfig, verbose=False,
+                        model_monitoring: Optional[MonitoringVars[NDArray]] = None) -> None:
 
   event_batch_generator = _get_events_from_repeated_reader(reader)
 
@@ -149,21 +179,22 @@ def model_training_loop(reader: Reader, reco: IModel[Tm],
 
     for n_batches in range(config.batch_per_epoch):
 
-      loss: Union[Tm, None] = None
-      for _ in range(config.batch_size):
+      evt, truth = _accumulate_event(event_batch_generator, config.batch_size)
 
-        evt, truth = next(event_batch_generator)
+      t_evt = reco.transform(evt)
+      i_evt = reco.migrate(t_evt)
+      model_pred = reco.predict(i_evt)
 
-        t_evt = reco.transform(reco.migrate(evt))
-        model_pred = reco.predict(t_evt)
+      loss = reco.loss(model_pred, truth)
 
-        e_loss = reco.loss(model_pred, truth)
-
-        loss = e_loss if loss is None else loss + e_loss
 
       if loss is None:
         raise RuntimeError("Seems that the batch size is 0, cannot run with batch size of 0")
       reco.back_propagate(loss)
+
+      if model_monitoring:
+        for name, fun in model_monitoring.variables.items():
+          model_monitoring.callback(name, fun(reco.unmigrate(loss), truth, reco.unmigrate(model_pred)))
 
       if verbose:
         print(f"\33[2K\rEpoch {epoch+1}/{config.n_epochs} : {n_batches}/{config.batch_per_epoch}", end="")

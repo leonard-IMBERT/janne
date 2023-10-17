@@ -4,7 +4,7 @@ This interface represent an object that can "infer" from a juno event a set of
 observables.
 """
 from abc import ABC, abstractmethod
-from typing import Any, TypeVar, Generic
+from typing import Any, List, TypeVar, Generic
 
 from numpy.typing import NDArray
 
@@ -39,7 +39,7 @@ class IModel(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def migrate(self, raw_data: NDArray) -> T:
+  def migrate(self, raw_data: List[NDArray]) -> T:
     """Migrate the data from numpy to the internal representation
 
     :param raw_data: The raw data to migrate
@@ -49,7 +49,7 @@ class IModel(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def unmigrate(self, internal_data: T) -> NDArray:
+  def unmigrate(self, internal_data: T) -> List[NDArray]:
     """Migrate the data from the internal representation to numpy
 
     :param internal_data: The raw data to migrate
@@ -59,7 +59,7 @@ class IModel(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def transform(self, raw_data: T) -> T:
+  def transform(self, raw_data: List[NDArray]) -> List[NDArray]:
     """Transform raw data
 
     Transform raw data in a format that is fitted for prediction.The raw
@@ -85,7 +85,7 @@ class IModel(ABC, Generic[T]):
     pass
 
   @abstractmethod
-  def loss(self, prediction: T, truth: NDArray) -> T:
+  def loss(self, prediction: T, truth: List[NDArray]) -> T:
     """Compute the loss between the prediction and the truth
 
     :param T prediction: The prediction produced from the ``predict method``

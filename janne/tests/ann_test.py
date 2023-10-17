@@ -7,7 +7,7 @@ some mock implementation of the ANN
 from janne.interfaces import IAdversorial
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, List
 
 import numpy as np
 from numpy.typing import NDArray
@@ -44,19 +44,19 @@ class MockAdversorial(IAdversorial[MockInternalRepresentation]):
   def perturbate(self, internal_data: MockInternalRepresentation) -> MockInternalRepresentation:
     if self._config is None:
       raise RuntimeError("MockAdversorial hasn't been initialized")
-    return internal_data.apply(lambda d: np.concatenate((d[:, :-1], d[:, -1:] + self._shift), axis=-1))
+    return internal_data.apply(lambda d: np.concatenate((d[...,:, :-1], d[...,:, -1:] + self._shift), axis=-1))
 
-  def migrate(self, raw_data: NDArray) -> MockInternalRepresentation:
+  def migrate(self, raw_data: List[NDArray]) -> MockInternalRepresentation:
     if self._config is None:
       raise RuntimeError("MockAdversorial hasn't been initialized")
-    return MockInternalRepresentation(raw_data)
+    return MockInternalRepresentation(np.array(raw_data))
 
-  def unmigrate(self, internal_data: MockInternalRepresentation) -> NDArray:
+  def unmigrate(self, internal_data: MockInternalRepresentation) -> List[NDArray]:
     if self._config is None:
       raise RuntimeError("MockAdversorial hasn't been initialized")
-    return internal_data.get()
+    return list(internal_data.get())
 
-  def adv_loss(self, truth: NDArray, prediction: NDArray, raw_data: NDArray,
+  def adv_loss(self, truth: List[NDArray], prediction: List[NDArray], raw_data: List[NDArray],
                perturbated_data: MockInternalRepresentation) -> MockInternalRepresentation:
     if self._config is None:
       raise RuntimeError("MockAdversorial hasn't been initialized")
@@ -65,8 +65,8 @@ class MockAdversorial(IAdversorial[MockInternalRepresentation]):
 
     return i_truth.map(i_pred, lambda d1, d2: np.mean((d1 - d2) ** 2, axis=-1))
 
-  def reg_loss(self, truth: NDArray, prediction: NDArray,
-               raw_data: NDArray, perturbated_data: MockInternalRepresentation) -> MockInternalRepresentation:
+  def reg_loss(self, truth: List[NDArray], prediction: List[NDArray],
+               raw_data: List[NDArray], perturbated_data: MockInternalRepresentation) -> MockInternalRepresentation:
     if self._config is None:
       raise RuntimeError("MockAdversorial hasn't been initialized")
     i_raw = self.migrate(raw_data)
