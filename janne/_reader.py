@@ -1,7 +1,7 @@
 """Internal module implementing the Reader class that automatically paralellise
 IDecoder
 """
-import queue
+from enum import Enum
 from typing import Any, Iterable, List, Optional, Tuple, Union
 
 import random
@@ -11,10 +11,14 @@ from multiprocessing import Process, Queue, Event as AtomicBoolean
 from multiprocessing.synchronize import Event as TAtomicBoolean
 
 import numpy as np
+from numpy._typing import _Shape
+from numpy.typing import NDArray
+
 
 from .interfaces import IDecoder
 
-Event = Tuple[np.ndarray, Optional[np.ndarray]]
+Event = Tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]
+RawEvent = Tuple[_Shape, bytes, Optional[_Shape], Optional[bytes]]
 
 def _decode_consumer(tdecoder: type[IDecoder], config: Any, event_queue: Queue,
                      stop_flag: TAtomicBoolean,
@@ -23,13 +27,103 @@ def _decode_consumer(tdecoder: type[IDecoder], config: Any, event_queue: Queue,
   decoder.initialize(config)
   for event in decoder:
     if stop_flag.is_set():
-      return
+      break
     event_queue.put((event[0].shape, event[0].tobytes(),
                      event[1].shape if event[1] is not None else None,
                      event[1].tobytes() if event[1] is not None else None))
+  event_queue.put(None)
 
+class WorkerState(Enum):
+  UNINITIALIZED = 0
+  INITIALIZED = 1
+  CONSUMED = 2
 
+class Worker():
+  """A worker that will run a decoder in a different Process
 
+  The worker is responsible for the managing of the ressources needed
+  by the decoder
+
+  :param tdecoders: The type or the :class:`IDecoder`
+  :param conf: A configuration for the :class:`IDecoder`
+  :param int buffer: The size of the buffer to use
+  """
+  def __init__(self, tdecoder: type[IDecoder], config: Any, buffer: int) -> None:
+    if buffer <= 0:
+      raise ValueError(f"Cannot initialize a buffer with a size of {buffer}")
+
+    self._stop_flag: TAtomicBoolean = AtomicBoolean()
+    self._stop_flag.clear()
+
+    self._state = WorkerState.UNINITIALIZED
+
+    self._worker: Optional[Process] = None
+    self._tdecoder = tdecoder
+    self._config = config
+
+    self._buffer_size = buffer
+
+    self.queue: Queue = Queue(maxsize=self._buffer_size)
+
+  def start(self):
+    self._worker = Process(target=_decode_consumer, args=(self._tdecoder, self._config, self.queue, self._stop_flag))
+    self._worker.start()
+
+    self._state = WorkerState.INITIALIZED
+
+  def stop(self):
+    if self._state == WorkerState.INITIALIZED:
+      self._stop_flag.set()
+
+      while self.queue.get() is not None:
+        pass
+
+      self.queue.close()
+
+      if self._worker:
+        self._worker.join()
+
+      self._state = WorkerState.CONSUMED
+    elif self._state == WorkerState.UNINITIALIZED:
+      self.queue.close()
+
+      if self._worker:
+        self._worker.join()
+
+      self._state = WorkerState.CONSUMED
+
+  def reset(self):
+    if self._state != WorkerState.CONSUMED:
+      raise RuntimeError("Cannot reset workers while they are not fully consumed")
+
+    self.queue = Queue(maxsize=self._buffer_size)
+    self._stop_flag.clear()
+
+    self._state = WorkerState.UNINITIALIZED
+
+  def __next__(self) -> Event:
+    if self._state == WorkerState.CONSUMED:
+      raise StopIteration
+
+    ret_val = self.queue.get()
+
+    if ret_val is None:
+      self.queue.close()
+      if self._worker:
+        self._worker.join()
+      self._state = WorkerState.CONSUMED
+
+      raise StopIteration
+
+    dshape, data, tshape, truth = ret_val
+    return (np.ndarray(shape=dshape, dtype=np.float64, buffer=data),
+            np.ndarray(shape=tshape, dtype=np.float64, buffer=truth) if truth is not None else None)
+
+  def get_state(self):
+    return self._state
+
+  def __del__(self):
+    self.stop()
 
 class Reader(Iterable[Event]):
   """A :class:`Reader` is responsible for managing and reading
@@ -62,98 +156,55 @@ class Reader(Iterable[Event]):
     self._random = random.Random(seed)
     self._np_random = np.random.default_rng(seed)
 
-    # Event storage and fetching
-    self._events : Queue = Queue(buffer)
-    self._stop_flag: TAtomicBoolean = AtomicBoolean()
-    self._stop_flag.clear()
-
-    self._n_workers = n_workers
 
     # Decoders and their threads
-    self._decoders : List[Tuple[Any, type[IDecoder]]] = []
-    self._workers : List[Union[Process, None]] = []
-    self._consumed_mask = []
-    self._indexes = []
+    self._n_workers = n_workers
+    self._workers : List[Worker] = []
 
     decoders_it = itertools.cycle(decoders if isinstance(decoders, Iterable) else [decoders])
 
     # Initialize workers
     for (config, decoder) in zip(config_generator, decoders_it):
-      self._decoders.append((config, decoder))
-      self._workers.append(None)
+      self._workers.append(Worker(decoder, config, int(self._buffer_len/self._p_n_workers)))
 
-    self._consumed_mask = np.full((len(self._decoders)), False)
-    self._indexes = np.array(range(len(self._decoders)))
+    self._indexes = np.linspace(0, len(self._workers)-1, len(self._workers)).astype(int)
+
 
     # Start the threads
-    while sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) < self._n_workers:
-      index = self._np_random.choice(self._indexes[np.invert(self._consumed_mask)])
+    self._check_workers()
 
-      dec_config, dec_typ = self._decoders[index]
-      self._workers[index] = Process(
-          target=_decode_consumer,
-          args=(dec_typ, dec_config, self._events, self._stop_flag)
-          )
-      self._workers[index].start()
-      self._consumed_mask[index] = True
-
-    # pylint: enable=line-too-long
+  def _worker_mask(self, state: WorkerState) -> NDArray:
+    return np.array(list(map(lambda w: w.get_state() == state, self._workers)))
 
   def __iter__(self):
     return self
 
   def __next__(self) -> Event:
-    while True:
+    index = self._np_random.choice(self._indexes[self._worker_mask(WorkerState.INITIALIZED)])
+
+    try:
+      return next(self._workers[index])
+    except StopIteration as exc:
       self._check_workers()
 
-      try:
-        dshape, data, tshape, truth = self._events.get(True, 1/2)
-        return (np.ndarray(shape=dshape, dtype=np.float64, buffer=data),
-                np.ndarray(shape=tshape, dtype=np.float64, buffer=truth) if truth is not None else None)
-      except queue.Empty as exc:
-
-        # If every thread is dead (never start or finished reading) and every
-        # file have been consumed, raise Stop Iteration
-        if (sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) == 0
-            and sum(np.invert(self._consumed_mask)) == 0
-            and self._events.empty()):
-          raise StopIteration from exc
+      if np.alltrue(self._worker_mask(WorkerState.CONSUMED)):
+        raise StopIteration from exc
+      else:
+        return next(self)
 
   def _check_workers(self) -> bool:
-    while sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) < self._n_workers:
-      avail_files = self._indexes[np.invert(self._consumed_mask)]
-      if len(avail_files) <= 0:
+    while np.sum(self._worker_mask(WorkerState.INITIALIZED)) < self._n_workers:
+      if np.alltrue(np.invert(self._worker_mask(WorkerState.UNINITIALIZED))):
         return False
-      index = self._np_random.choice(avail_files)
-
-
-      dec_config, dec_typ = self._decoders[index]
-      self._workers[index] = Process(
-          target=_decode_consumer,
-          args=(dec_typ, dec_config, self._events, self._stop_flag)
-          )
+      index = self._np_random.choice(self._indexes[self._worker_mask(WorkerState.UNINITIALIZED)])
       self._workers[index].start()
-      self._consumed_mask[index] = True
-
-      while sum(map(lambda _:  _ is not None and _.is_alive(), self._workers)) == 0:
-        continue
 
     return True
 
   def close(self):
-    self._stop_flag.set()
-
-    while sum(map(lambda _: _.is_alive() if _ is not None else False, self._workers)) > 0:
-      try:
-        self._events.get(True, 1/10)
-      except queue.Empty:
-        continue
+    """Close the reader, freeing all ressources"""
     for worker in self._workers:
-      if worker is not None and worker.is_alive():
-        worker.join()
-
-    self._events.close()
-    self._events.join_thread()
+      worker.stop()
 
   def __del__(self):
     self.close()
@@ -170,31 +221,9 @@ class Reader(Iterable[Event]):
     self._random = random.Random(seed if seed is not None else self._p_seed)
     self._np_random = np.random.default_rng(seed if seed is not None else self._p_seed)
 
-    self._stop_flag.clear()
+    for worker in self._workers:
+      worker.reset()
 
-    self._workers : List[Union[Process, None]] = []
-    self._consumed_mask = []
-    self._indexes = []
-
-
-    self._events : Queue = Queue(self._buffer_len)
-
-    # Initialize workers
-    self._workers = [None for _ in self._decoders]
-
-    self._consumed_mask = np.full((len(self._decoders)), False)
-    self._indexes = np.array(range(len(self._decoders)))
-
-    # Start the threads
-    while sum(map(lambda thread: thread is not None and thread.is_alive(), self._workers)) < self._n_workers:
-      index = self._np_random.choice(self._indexes[np.invert(self._consumed_mask)])
-
-      dec_config, dec_typ = self._decoders[index]
-      self._workers[index] = Process(
-          target=_decode_consumer,
-          args=(dec_typ, dec_config, self._events, self._stop_flag)
-          )
-      self._workers[index].start()
-      self._consumed_mask[index] = True
+    self._check_workers()
 
     return self
