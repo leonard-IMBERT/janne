@@ -75,7 +75,8 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
                       ann: IAdversorial[Ta], reco: IModel[Tm],
                       config : ANNTrainingLoopConfig, verbose=False,
                       cs_monitoring: Optional[MonitoringVars[NDArray[np.float64]]] = None,
-                      evt_monitoring: Optional[MonitoringVars[NDArray[np.float64]]] = None) -> None:
+                      evt_monitoring: Optional[MonitoringVars[NDArray[np.float64]]] = None,
+                      epoch_callback: Optional[Callable[[List[NDArray], List[NDArray]], None]] = None) -> None:
 
   epoch = 0
   n_batches = 0
@@ -144,6 +145,8 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
       print(f"\33[2K\rEpoch {epoch+1}/{config.n_epochs} : {n_batches}/{config.batch_per_epoch}", end="")
 
     if n_batches == 0:
+      if epoch_callback:
+        epoch_callback(reco.unmigrate(model_cs_prediction), cs_truths)
       epoch += 1
 
 @dataclass
@@ -156,19 +159,12 @@ class ModelTrainingLoopConfig:
 
 def model_training_loop(reader: Reader, reco: IModel[Tm],
                         config: ModelTrainingLoopConfig, verbose=False,
-                        model_monitoring: Optional[MonitoringVars[NDArray]] = None) -> None:
+                        model_monitoring: Optional[MonitoringVars[NDArray]] = None,
+                        epoch_callback: Optional[Callable[[List[NDArray], List[NDArray]], None]] = None) -> None:
 
   event_batch_generator = _get_events_from_repeated_reader(reader)
 
-  validation_events = []
-  validation_truth = []
-  for _ in range(config.validation_n_batch):
-    evt, truth = next(event_batch_generator)
-    validation_events.append(evt)
-    validation_truth.append(truth)
-
-  validation_events = np.concatenate(validation_events, axis=0)
-  validation_truth = np.concatenate(validation_truth, axis=0)
+  validation_events, validation_truth = _accumulate_event(event_batch_generator, config.validation_n_batch)
 
   n_batches = 0
 
@@ -187,9 +183,6 @@ def model_training_loop(reader: Reader, reco: IModel[Tm],
 
       loss = reco.loss(model_pred, truth)
 
-
-      if loss is None:
-        raise RuntimeError("Seems that the batch size is 0, cannot run with batch size of 0")
       reco.back_propagate(loss)
 
       if model_monitoring:
@@ -198,3 +191,9 @@ def model_training_loop(reader: Reader, reco: IModel[Tm],
 
       if verbose:
         print(f"\33[2K\rEpoch {epoch+1}/{config.n_epochs} : {n_batches}/{config.batch_per_epoch}", end="")
+
+    t_valid = reco.transform(validation_events)
+    i_valid = reco.migrate(t_valid)
+    pred_valid = reco.predict(i_valid)
+    if epoch_callback:
+      epoch_callback(reco.unmigrate(pred_valid), validation_truth)

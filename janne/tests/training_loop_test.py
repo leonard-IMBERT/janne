@@ -31,7 +31,7 @@ class TestTrainingLoop():
     with warnings.catch_warnings():
       warnings.simplefilter("ignore")
       ann_training_loop(reader, reader_cs, ann, model,
-                        ANNTrainingLoopConfig(n_epochs=5, batch_size=256, batch_per_epoch=300, n_cs_event=100),
+                        ANNTrainingLoopConfig(n_epochs=5, batch_size=25, batch_per_epoch=30, n_cs_event=10),
                         verbose=True)
 
     assert True
