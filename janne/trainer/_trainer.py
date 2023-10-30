@@ -115,12 +115,88 @@ def ann_training_loop(reader: Reader, cs_reader: Reader,
     np_cs_perturbated = ann.unmigrate(ann_cs_perturbated)
 
     # Run the reco on cs
-    model_cs_p_event = reco.migrate(np_cs_perturbated)
+    model_cs_t_events = reco.transform(np_cs_perturbated)
+    model_cs_p_event = reco.migrate(model_cs_t_events)
     model_cs_prediction = reco.predict(model_cs_p_event)
 
     reg_loss = ann.reg_loss(
             truth= cs_truths,
             prediction= reco.unmigrate(model_cs_prediction),
+            raw_data= cs_events,
+            perturbated_data= ann_cs_perturbated)
+
+
+
+    if cs_monitoring:
+      for name, fun in cs_monitoring.variables.items():
+        cs_monitoring.callback(name, fun(ann.unmigrate(reg_loss), cs_truths, reco.unmigrate(model_cs_prediction)))
+
+    if evt_monitoring:
+      for name, fun in evt_monitoring.variables.items():
+        evt_monitoring.callback(name, fun(ann.unmigrate(reg_loss), truths, reco.unmigrate(model_prediction)))
+
+
+    if reg_loss is None or adv_loss is None:
+      raise RuntimeError("Seems that the batch size is 0, cannot run with batch size of 0")
+    ann.back_propagate(ann.combine_losses(adv_loss, reg_loss))
+
+    n_batches = (n_batches + 1) % config.batch_per_epoch
+
+    if verbose:
+      print(f"\33[2K\rEpoch {epoch+1}/{config.n_epochs} : {n_batches}/{config.batch_per_epoch}", end="")
+
+    if n_batches == 0:
+      if epoch_callback:
+        epoch_callback(reco.unmigrate(model_cs_prediction), cs_truths)
+      epoch += 1
+
+
+Tf = TypeVar("Tf", bound=SupportsAdd)
+def ann_training_loop_same_framework(reader: Reader, cs_reader: Reader,
+                                     ann: IAdversorial[Tf], reco: IModel[Tf],
+                                     config : ANNTrainingLoopConfig, verbose=False,
+                                     cs_monitoring: Optional[MonitoringVars[NDArray[np.float64]]] = None,
+                                     evt_monitoring: Optional[MonitoringVars[NDArray[np.float64]]] = None,
+                                     epoch_callback: Optional[Callable[[List[NDArray], List[NDArray]], None]] = None):
+
+  epoch = 0
+  n_batches = 0
+
+  event_batch_generator = _get_events_from_repeated_reader(reader)
+  cs_batch_generator = _get_events_from_repeated_reader(cs_reader)
+
+  if verbose:
+    print("\nStarting training the ANN")
+  while epoch < config.n_epochs:
+
+    # Run the ann
+
+    events, truths = _accumulate_event(event_batch_generator, config.batch_size)
+
+    ann_events = ann.migrate(events)
+    ann_perturbated = ann.perturbate(ann_events)
+
+    # Run the reco
+    model_prediction = reco.predict(ann_perturbated)
+
+    adv_loss = ann.adv_loss(
+            truth=truths,
+            prediction=model_prediction,
+            raw_data=events,
+            perturbated_data=ann_perturbated)
+
+    cs_events, cs_truths = _accumulate_event(cs_batch_generator, config.n_cs_event)
+
+    # Run the ann on cs
+    ann_cs_events = ann.migrate(cs_events)
+    ann_cs_perturbated = ann.perturbate(ann_cs_events)
+
+    # Run the reco on cs
+    model_cs_prediction = reco.predict(ann_cs_perturbated)
+
+    reg_loss = ann.reg_loss(
+            truth= cs_truths,
+            prediction=model_cs_prediction,
             raw_data= cs_events,
             perturbated_data= ann_cs_perturbated)
 
